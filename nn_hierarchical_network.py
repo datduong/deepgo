@@ -242,6 +242,7 @@ def get_layers(inputs):
     q = deque()
     layers = {}
     name = get_node_name(GO_ID)
+    # @inputs is a Dense layer
     layers[GO_ID] = {'net': inputs}
     for node_id in go[GO_ID]['children']:
         if node_id in func_set:

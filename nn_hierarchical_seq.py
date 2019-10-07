@@ -246,10 +246,11 @@ def get_layers(inputs):
     q = deque()
     layers = {}
     name = get_node_name(GO_ID)
+    # each go term has: net = Dense(1024, activation='relu')(feature_model) ?
     layers[GO_ID] = {'net': inputs}
-    for node_id in go[GO_ID]['children']:
+    for node_id in go[GO_ID]['children']: ## @node_id is child of @GO_ID
         if node_id in func_set:
-            q.append((node_id, inputs))
+            q.append((node_id, inputs)) ## get all children terms
     while len(q) > 0:
         node_id, net = q.popleft()
         parent_nets = [inputs]
@@ -260,44 +261,64 @@ def get_layers(inputs):
         #     name = get_node_name(node_id) + '_parents'
         #     net = merge(
         #         parent_nets, mode='concat', concat_axis=1, name=name)
+
         name = get_node_name(node_id)
-        net, output = get_function_node(name, inputs)
+
+        # @net is Dense(feature->1024) @output is Dense(feature->1024->1)
+        net, output = get_function_node(name, inputs) # @get_function_node returns output,output ... so net==output
+
         if node_id not in layers:
-            layers[node_id] = {'net': net, 'output': output}
-            for n_id in go[node_id]['children']:
+            layers[node_id] = {'net': net, 'output': output} ## add child to @layer dict, because @get_function_node returns output,output, we have net=Dense(feature->1024->1)
+            for n_id in go[node_id]['children']: ## get children of child node
                 if n_id in func_set and n_id not in layers:
                     ok = True
-                    for p_id in get_parents(go, n_id):
+                    for p_id in get_parents(go, n_id): ## get parents of children of child node. ( so we don't double count these nodes, if we have seen their parents? )
                         if p_id in func_set and p_id not in layers:
                             ok = False
                     if ok:
                         q.append((n_id, net))
 
     for node_id in functions:
-        childs = set(go[node_id]['children']).intersection(func_set)
+        childs = set(go[node_id]['children']).intersection(func_set) # children of given node
         if len(childs) > 0:
             outputs = [layers[node_id]['output']]
             for ch_id in childs:
-                outputs.append(layers[ch_id]['output'])
+                outputs.append(layers[ch_id]['output']) ## concat a @output Dense(feature->1024->1)
             name = get_node_name(node_id) + '_max'
+
+            ## create layer that takes max over all children of current node
             layers[node_id]['output'] = merge(
-                outputs, mode='max', name=name)
+                outputs, mode='max', name=name) ## replace @output with @merge layer. is this doing simple max pooling of @outputs ?
+
+    ## what does layer look like ?
+    """
+    layers[ GOid ] = {'net': Dense(feature->1024->1), 'output': maxpool( [ Dense(feature->1024->1) ... ] ) ... we iter maxpool over array output of @net from all children and current node}
+    """
+
     return layers
 
 
 def get_model():
     logging.info("Building the model")
-    inputs = Input(shape=(MAXLEN,), dtype='int32', name='input1')
-    feature_model = get_feature_model()(inputs)
-    net = Dense(1024, activation='relu')(feature_model)
-    layers = get_layers(net)
+    inputs = Input(shape=(MAXLEN,), dtype='int32', name='input1') ## protein input size, amino acid indexing
+    feature_model = get_feature_model()(inputs) ## convert amino sequence into vector
+    net = Dense(1024, activation='relu')(feature_model) ## final input 1024
+
+    ## @net converts prot_feature-->1024
+    layers = get_layers(net) ## takes @net as input, so we take output of protein encoder @net
+
     output_models = []
     for i in range(len(functions)):
-        output_models.append(layers[functions[i]]['output'])
-    net = merge(output_models, mode='concat', concat_axis=1)
+        output_models.append(layers[functions[i]]['output']) 
+
+    ## output prob for each GO term, so we concat
+    net = merge(output_models, mode='concat', concat_axis=1) ## override @net=Dense(1024, activation='relu')(feature_model)
+
     # net = Dense(1024, activation='relu')(merged)
     # net = Dense(len(functions), activation='sigmoid')(net)
-    model = Model(input=inputs, output=net)
+
+    model = Model(input=inputs, output=net) ## @inputs is protein kmer or animo seq, output is array len=num_go_term
+
     logging.info('Compiling the model')
     optimizer = RMSprop()
 
